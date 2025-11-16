@@ -1,39 +1,59 @@
 <?php
-header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
-require_once "db.php";
+header('Content-Type: application/json');
 
-$email    = $_POST['email'] ?? '';
+// Получение данных
+$email = $_POST['email'] ?? '';
 $password = $_POST['password'] ?? '';
 
 if (empty($email) || empty($password)) {
-    echo "error: Заполните все поля";
+    echo json_encode(["status" => "error", "message" => "Пожалуйста, заполните все поля"]);
     exit;
 }
 
-// Ищем пользователя по email
-$stmt = $conn->prepare("SELECT username, password, score FROM users WHERE email=?");
-$stmt->bind_param("s", $email);
-$stmt->execute();
-$stmt->store_result();
-$stmt->bind_result($username, $hashed_password, $score);
+// Получение переменных окружения Render
+$host = getenv('DB_HOST');
+$port = getenv('DB_PORT') ?: 5432;
+$dbname = getenv('DB_NAME');
+$user = getenv('DB_USER');
+$pass = getenv('DB_PASSWORD');
 
-if ($stmt->num_rows === 0) {
-    echo "error: Пользователь не найден";
-    $stmt->close();
+// Подключение к PostgreSQL
+$conn = pg_connect("host=$host port=$port dbname=$dbname user=$user password=$pass");
+
+if (!$conn) {
+    echo json_encode(["status" => "error", "message" => "Ошибка подключения к базе"]);
     exit;
 }
 
-$stmt->fetch();
+// Получение пользователя по email
+$query = "SELECT username, password_hash, score FROM users WHERE email = $1";
+$result = pg_query_params($conn, $query, [$email]);
 
-// Проверяем пароль
-if (password_verify($password, $hashed_password)) {
-    echo "ok: Авторизация успешна:$email:$username:$score";
-} else {
-    echo "error: Неверный пароль";
+if (!$result) {
+    echo json_encode(["status" => "error", "message" => "Ошибка выполнения запроса"]);
+    exit;
 }
 
-$stmt->close();
-$conn->close();
+if (pg_num_rows($result) === 0) {
+    echo json_encode(["status" => "error", "message" => "Пользователь не найден"]);
+    exit;
+}
+
+$row = pg_fetch_assoc($result);
+
+// Проверка пароля
+if (!password_verify($password, $row['password_hash'])) {
+    echo json_encode(["status" => "error", "message" => "Неверный пароль"]);
+    exit;
+}
+
+// Всё ок — возвращаем данные
+echo json_encode([
+    "status" => "ok",
+    "message" => "Авторизация успешна",
+    "username" => $row['username'],
+    "score" => (int)$row['score']
+]);
+
+pg_close($conn);
 ?>

@@ -1,58 +1,51 @@
 <?php
-header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
-require_once "db.php";
+header('Content-Type: application/json');
 
 // Получаем данные из POST
 $username = $_POST['user'] ?? '';
-$email    = $_POST['email'] ?? '';
+$email = $_POST['email'] ?? '';
 $password = $_POST['password'] ?? '';
 
-// Проверка, что все поля заполнены
 if (empty($username) || empty($email) || empty($password)) {
-    echo "error: Пожалуйста, заполните все поля";
+    echo json_encode(["status" => "error", "message" => "Пожалуйста, заполните все поля"]);
     exit;
 }
 
-// Валидация: email
-if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    echo "error: Некорректный email";
+// Подключение к PostgreSQL через переменные окружения
+$host = getenv('DB_HOST');
+$port = getenv('DB_PORT') ?: 5432;
+$dbname = getenv('DB_NAME');
+$user = getenv('DB_USER');
+$pass = getenv('DB_PASSWORD');
+
+$conn = pg_connect("host=$host port=$port dbname=$dbname user=$user password=$pass");
+if (!$conn) {
+    echo json_encode(["status" => "error", "message" => "Ошибка подключения к базе"]);
     exit;
 }
 
-// Валидация: пароль минимум 8 символов
-if (strlen($password) < 8) {
-    echo "error: Пароль должен быть не менее 8 символов";
+// Проверка на существующего пользователя
+$result = pg_query_params($conn, "SELECT id FROM users WHERE username=$1 OR email=$2", [$username, $email]);
+if (!$result) {
+    echo json_encode(["status" => "error", "message" => "Ошибка запроса к базе"]);
     exit;
 }
 
-// Проверка, есть ли уже такой пользователь
-$stmt = $conn->prepare("SELECT id FROM users WHERE username=? OR email=?");
-$stmt->bind_param("ss", $username, $email);
-$stmt->execute();
-$stmt->store_result();
-
-if ($stmt->num_rows > 0) {
-    echo "error: Пользователь с таким именем или email уже существует";
-    $stmt->close();
+if (pg_num_rows($result) > 0) {
+    echo json_encode(["status" => "error", "message" => "Пользователь с таким именем или почтой уже существует"]);
     exit;
 }
-$stmt->close();
 
-// Хешируем пароль
-$hashed_password = password_hash($password, PASSWORD_DEFAULT);
+// Хэшируем пароль
+$passwordHash = password_hash($password, PASSWORD_BCRYPT);
 
-// Вставка нового пользователя
-$stmt = $conn->prepare("INSERT INTO users (username, email, password, score) VALUES (?, ?, ?, 0)");
-$stmt->bind_param("sss", $username, $email, $hashed_password);
-
-if ($stmt->execute()) {
-    echo "ok: Пользователь зарегистрирован";
+// Вставляем нового пользователя
+$insert = pg_query_params($conn, "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3)", [$username, $email, $passwordHash]);
+if ($insert) {
+    echo json_encode(["status" => "ok", "message" => "Регистрация успешна!"]);
 } else {
-    echo "error: Не удалось зарегистрировать пользователя";
+    echo json_encode(["status" => "error", "message" => "Ошибка регистрации"]);
 }
 
-$stmt->close();
-$conn->close();
+pg_close($conn);
 ?>
